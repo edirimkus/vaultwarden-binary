@@ -211,6 +211,73 @@ jobs:
           prerelease: false
           files: ./windows-binary/*
 
+  update-readme:
+    needs: [check-and-prepare, create-release]
+    if: needs.check-and-prepare.outputs.release_exists == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Update README with latest Windows version
+        env:
+          VERSION: ${{ needs.check-and-prepare.outputs.release_version }}
+          RELEASE_TAG: ${{ needs.check-and-prepare.outputs.release_version }}-windows
+          REPO: ${{ github.repository }}
+        run: |
+          UPDATED_AT=$(date -u '+%Y-%m-%d %H:%M UTC')
+          python3 - <<'PYEOF'
+          import os, re
+
+          version = os.environ["VERSION"]
+          release_tag = os.environ["RELEASE_TAG"]
+          repo = os.environ["REPO"]
+          updated_at = os.environ.get("UPDATED_AT", "")
+
+          row = ("| Windows x64 | [{version}](https://github.com/{repo}/releases/tag/{tag}) "
+                 "| [vaultwarden-{version}-windows-x64.exe](https://github.com/{repo}/releases/tag/{tag}) | {updated} |\n").format(
+              version=version, repo=repo, tag=release_tag, updated=updated_at)
+
+          readme_path = "README.md"
+          with open(readme_path, encoding="utf-8") as f:
+              content = f.read()
+
+          start = "<!-- VAULTWARDEN-VERSION-TABLE:START -->"
+          end = "<!-- VAULTWARDEN-VERSION-TABLE:END -->"
+
+          if start in content and end in content:
+              # Windows row replaces a previous Windows row, or is appended after existing rows.
+              window_row_pattern = re.compile(r"^\| Windows x64 \|.*\|\s*\n", re.M)
+              if window_row_pattern.search(content):
+                  content = window_row_pattern.sub(row, content)
+              else:
+                  content = content.replace(end, row + end)
+          else:
+              table = (start + "\n"
+                       "| Platform | Vaultwarden Version | Release | Updated |\n"
+                       "|---|---|---|---|\n"
+                       + row + end)
+              content = content.rstrip("\n") + "\n\n" + table + "\n"
+
+          with open(readme_path, "w", encoding="utf-8") as f:
+              f.write(content)
+          print("README updated for", version)
+          PYEOF
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --cached --quiet; then
+            echo "No README changes to commit"
+            exit 0
+          fi
+          git commit -m "docs: update latest version to ${{ needs.check-and-prepare.outputs.release_version }} (windows)"
+          git push
+
   update-existing-release:
     needs: [check-and-prepare, build-windows]
     if: needs.check-and-prepare.outputs.release_exists == 'true' && needs.check-and-prepare.outputs.windows_asset_exists == 'false'
